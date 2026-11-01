@@ -6,9 +6,9 @@ import {
   History, LogOut, CheckCircle, AlertTriangle, ArrowRight, UserPlus, FolderPlus, Download,
   Copy, Check
 } from "lucide-react";
-const inviteProcessedRef = useRef(false);
 
 export default function App() {
+  const inviteProcessedRef = useRef(false);
   const [token, setToken] = useState<string | null>(localStorage.getItem("token"));
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
