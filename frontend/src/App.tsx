@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { api } from "./api";
 import type { User, Project, Environment, VariableItem, DiffItem, HistoryItem } from "./types";
 import {
@@ -6,6 +6,7 @@ import {
   History, LogOut, CheckCircle, AlertTriangle, ArrowRight, UserPlus, FolderPlus, Download,
   Copy, Check
 } from "lucide-react";
+const inviteProcessedRef = useRef(false);
 
 export default function App() {
   const [token, setToken] = useState<string | null>(localStorage.getItem("token"));
@@ -47,34 +48,23 @@ export default function App() {
   useEffect(() => {
     if (!token) return;
 
-    const initUserAndProjects = async () => {
-      try {
-        const meRes = await api.get("/auth/me");
-        setCurrentUser(meRes.data);
+    const params = new URLSearchParams(window.location.search);
+    const inviteParam = params.get("invite");
 
-        // Check if there is an invite in the URL to redeem first
-        const params = new URLSearchParams(window.location.search);
-        const inviteParam = params.get("invite");
+    if (inviteParam && !inviteProcessedRef.current) {
+      inviteProcessedRef.current = true;
 
-        if (inviteParam) {
-          try {
-            await api.post("/projects/accept-invite", { token: inviteParam });
-          } catch (err: any) {
-            console.error("Invite redeem error:", err.response?.data?.detail || err.message);
-          } finally {
-            // Clean the ?invite= parameter from address bar
-            window.history.replaceState({}, document.title, window.location.pathname);
-          }
-        }
-
-        // Now load projects (will include the newly accepted project)
-        await loadProjects();
-      } catch {
-        handleLogout();
-      }
-    };
-
-    initUserAndProjects();
+      api.post("/projects/accept-invite", { token: inviteParam })
+        .then(() => {
+          window.history.replaceState({}, document.title, window.location.pathname);
+          loadProjects();
+        })
+        .catch((err) => {
+          console.warn("Invite note:", err.response?.data?.detail || err.message);
+          window.history.replaceState({}, document.title, window.location.pathname);
+          loadProjects();
+        });
+    }
   }, [token]);
 
   // Check for invite link parameter in URL and auto-accept
