@@ -3,7 +3,8 @@ import { api } from "./api";
 import type { User, Project, Environment, VariableItem, DiffItem, HistoryItem } from "./types";
 import {
   KeyRound, Shield, Eye, EyeOff, Plus, Trash2, ClipboardPaste,
-  History, LogOut, CheckCircle, AlertTriangle, ArrowRight, UserPlus, FolderPlus, Download
+  History, LogOut, CheckCircle, AlertTriangle, ArrowRight, UserPlus, FolderPlus, Download,
+  Copy, Check
 } from "lucide-react";
 
 export default function App() {
@@ -30,8 +31,11 @@ export default function App() {
   const [newVarVal, setNewVarVal] = useState("");
   const [newVarSensitive, setNewVarSensitive] = useState(false);
 
+  // In-App Direct Invite State
   const [showInviteModal, setShowInviteModal] = useState(false);
-  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteUrl, setInviteUrl] = useState("");
+  const [inviteLoading, setInviteLoading] = useState(false);
+  const [copiedInvite, setCopiedInvite] = useState(false);
 
   const [showBulkModal, setShowBulkModal] = useState(false);
   const [rawEnvText, setRawEnvText] = useState("");
@@ -41,13 +45,54 @@ export default function App() {
   const [historyLogs, setHistoryLogs] = useState<HistoryItem[]>([]);
 
   useEffect(() => {
-    if (token) {
-      api.get("/auth/me")
+    if (!token) return;
+
+    const initUserAndProjects = async () => {
+      try {
+        const meRes = await api.get("/auth/me");
+        setCurrentUser(meRes.data);
+
+        // Check if there is an invite in the URL to redeem first
+        const params = new URLSearchParams(window.location.search);
+        const inviteParam = params.get("invite");
+
+        if (inviteParam) {
+          try {
+            await api.post("/projects/accept-invite", { token: inviteParam });
+          } catch (err: any) {
+            console.error("Invite redeem error:", err.response?.data?.detail || err.message);
+          } finally {
+            // Clean the ?invite= parameter from address bar
+            window.history.replaceState({}, document.title, window.location.pathname);
+          }
+        }
+
+        // Now load projects (will include the newly accepted project)
+        await loadProjects();
+      } catch {
+        handleLogout();
+      }
+    };
+
+    initUserAndProjects();
+  }, [token]);
+
+  // Check for invite link parameter in URL and auto-accept
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const inviteParam = params.get("invite");
+    if (inviteParam && token) {
+      api.post("/projects/accept-invite", { token: inviteParam })
         .then((res) => {
-          setCurrentUser(res.data);
+          alert(res.data.message || "Successfully joined project!");
+          // Clean up the URL without reloading
+          window.history.replaceState({}, document.title, window.location.pathname);
           loadProjects();
         })
-        .catch(() => handleLogout());
+        .catch((err) => {
+          alert(err.response?.data?.detail || "Could not redeem invitation link.");
+          window.history.replaceState({}, document.title, window.location.pathname);
+        });
     }
   }, [token]);
 
@@ -64,6 +109,19 @@ export default function App() {
       localStorage.setItem("token", res.data.access_token);
       setToken(res.data.access_token);
       setCurrentUser(res.data.user);
+
+      // Check if user came from an invite link
+      const params = new URLSearchParams(window.location.search);
+      const inviteToken = params.get("invite");
+      if (inviteToken) {
+        try {
+          await api.post("/projects/accept-invite", { token: inviteToken });
+          window.history.replaceState({}, document.title, window.location.pathname);
+        } catch (inviteErr) {
+          console.error("Invite redeem error:", inviteErr);
+        }
+      }
+
       loadProjects();
     } catch (err: any) {
       const msg =
@@ -117,16 +175,24 @@ export default function App() {
     }
   };
 
-  const inviteMember = async () => {
-    if (!activeProject || !inviteEmail.trim()) return;
+  const generateInviteLink = async () => {
+    if (!activeProject) return;
+    setInviteLoading(true);
     try {
-      await api.post(`/projects/${activeProject.id}/members`, { email: inviteEmail });
-      alert(`User ${inviteEmail} invited successfully! (Email alert sent via Resend)`);
-      setShowInviteModal(false);
-      setInviteEmail("");
+      const res = await api.post(`/projects/${activeProject.id}/invites`);
+      setInviteUrl(res.data.invite_url);
     } catch (err: any) {
-      alert(err.response?.data?.detail || "Failed to invite member");
+      alert(err.response?.data?.detail || "Failed to generate invite link");
+    } finally {
+      setInviteLoading(false);
     }
+  };
+
+  const handleCopyInviteLink = () => {
+    if (!inviteUrl) return;
+    navigator.clipboard.writeText(inviteUrl);
+    setCopiedInvite(true);
+    setTimeout(() => setCopiedInvite(false), 2000);
   };
 
   useEffect(() => {
@@ -364,8 +430,8 @@ export default function App() {
                     setActiveEnv(proj.environments[0] || null);
                   }}
                   className={`w-full text-left px-3 py-2 rounded-lg text-sm transition font-medium flex items-center justify-between ${activeProject?.id === proj.id
-                      ? "bg-emerald-600/10 text-emerald-400 border border-emerald-500/20"
-                      : "text-slate-300 hover:bg-slate-800/60"
+                    ? "bg-emerald-600/10 text-emerald-400 border border-emerald-500/20"
+                    : "text-slate-300 hover:bg-slate-800/60"
                     }`}
                 >
                   <span className="truncate">{proj.name}</span>
@@ -392,7 +458,11 @@ export default function App() {
                 <div className="flex items-center gap-3">
                   {activeProject.role === "OWNER" && (
                     <button
-                      onClick={() => setShowInviteModal(true)}
+                      onClick={() => {
+                        setInviteUrl("");
+                        setCopiedInvite(false);
+                        setShowInviteModal(true);
+                      }}
                       className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-lg text-sm transition"
                     >
                       <UserPlus className="w-4 h-4 text-emerald-400" />
@@ -416,8 +486,8 @@ export default function App() {
                     key={env.id}
                     onClick={() => setActiveEnv(env)}
                     className={`px-4 py-1.5 rounded-lg text-xs font-semibold tracking-wide transition ${activeEnv?.id === env.id
-                        ? "bg-emerald-500 text-slate-950 shadow-md font-bold"
-                        : "bg-slate-900 border border-slate-800 text-slate-300 hover:bg-slate-800"
+                      ? "bg-emerald-500 text-slate-950 shadow-md font-bold"
+                      : "bg-slate-900 border border-slate-800 text-slate-300 hover:bg-slate-800"
                       }`}
                   >
                     {env.name.toUpperCase()}
@@ -672,32 +742,56 @@ export default function App() {
       {showInviteModal && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 w-full max-w-md shadow-2xl">
-            <h3 className="text-lg font-bold mb-4">Invite Team Member</h3>
-            <p className="text-xs text-slate-400 mb-4">
-              Enter the registered email of the user to grant them access to this project.
+            <h3 className="text-lg font-bold mb-2">Invite Collaborator</h3>
+            <p className="text-xs text-slate-400 mb-5">
+              Generate a unique, single-use invite link valid for 48 hours. Share it directly with your teammate.
             </p>
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">User Email</label>
-              <input
-                type="email"
-                value={inviteEmail}
-                onChange={(e) => setInviteEmail(e.target.value)}
-                placeholder="colleague@example.com"
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500"
-              />
-            </div>
+
+            {!inviteUrl ? (
+              <div className="py-4 text-center">
+                <button
+                  onClick={generateInviteLink}
+                  disabled={inviteLoading}
+                  className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition inline-flex items-center gap-2 shadow-lg shadow-emerald-950"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  {inviteLoading ? "Generating..." : "Generate Invite Link"}
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-medium text-slate-400 mb-1.5">Shareable Link</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={inviteUrl}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono text-slate-300 focus:outline-none"
+                    />
+                    <button
+                      onClick={handleCopyInviteLink}
+                      className="bg-slate-800 hover:bg-slate-700 text-emerald-400 p-2 rounded-lg transition shrink-0"
+                      title="Copy to clipboard"
+                    >
+                      {copiedInvite ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+                {copiedInvite && (
+                  <p className="text-xs text-emerald-400 flex items-center gap-1">
+                    <CheckCircle className="w-3.5 h-3.5" /> Copied to clipboard!
+                  </p>
+                )}
+              </div>
+            )}
+
             <div className="flex justify-end gap-3 mt-6">
               <button
                 onClick={() => setShowInviteModal(false)}
                 className="px-4 py-2 text-sm text-slate-400 hover:text-slate-200"
               >
-                Cancel
-              </button>
-              <button
-                onClick={inviteMember}
-                className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-sm font-medium"
-              >
-                Send Invite
+                Close
               </button>
             </div>
           </div>
@@ -745,19 +839,19 @@ export default function App() {
                     <div
                       key={item.key}
                       className={`p-3 rounded-lg border flex items-center justify-between text-xs font-mono ${item.status === "NEW"
-                          ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
-                          : item.status === "UPDATE"
-                            ? "bg-amber-500/10 border-amber-500/30 text-amber-300"
-                            : "bg-slate-900 border-slate-800 text-slate-400"
+                        ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                        : item.status === "UPDATE"
+                          ? "bg-amber-500/10 border-amber-500/30 text-amber-300"
+                          : "bg-slate-900 border-slate-800 text-slate-400"
                         }`}
                     >
                       <div className="flex-1">
                         <div className="flex items-center gap-2 mb-1">
                           <span className={`px-1.5 py-0.5 rounded font-bold text-[10px] uppercase ${item.status === "NEW"
-                              ? "bg-emerald-500 text-slate-950"
-                              : item.status === "UPDATE"
-                                ? "bg-amber-500 text-slate-950"
-                                : "bg-slate-800 text-slate-400"
+                            ? "bg-emerald-500 text-slate-950"
+                            : item.status === "UPDATE"
+                              ? "bg-amber-500 text-slate-950"
+                              : "bg-slate-800 text-slate-400"
                             }`}>
                             {item.status}
                           </span>

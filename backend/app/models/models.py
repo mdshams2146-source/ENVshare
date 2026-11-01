@@ -30,6 +30,8 @@ class Project(Base):
     members = relationship("ProjectMember", back_populates="project", cascade="all, delete-orphan")
     environments = relationship("Environment", back_populates="project", cascade="all, delete-orphan")
     history_logs = relationship("HistoryLog", back_populates="project", cascade="all, delete-orphan")
+    invitations = relationship("ProjectInvitation", back_populates="project", cascade="all, delete-orphan")
+
 
 class ProjectMember(Base):
     __tablename__ = "project_members"
@@ -89,3 +91,16 @@ class HistoryLog(Base):
     user = relationship("User", back_populates="history_logs")
     project = relationship("Project", back_populates="history_logs")
     environment = relationship("Environment", back_populates="history_logs")
+
+class ProjectInvitation(Base):
+    __tablename__ = "project_invitations"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    token = Column(String, unique=True, index=True, nullable=False)
+    role = Column(String, default="MEMBER")
+    is_used = Column(Boolean, default=False)
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    project = relationship("Project", back_populates="invitations")
