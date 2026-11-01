@@ -11,11 +11,18 @@ export default function App() {
   const inviteProcessedRef = useRef(false);
   const [token, setToken] = useState<string | null>(localStorage.getItem("token"));
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+
+  // Auth view states
+  const [authMode, setAuthMode] = useState<"login" | "register" | "forgot" | "reset">("login");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authName, setAuthName] = useState("");
   const [authError, setAuthError] = useState("");
+  const [authSuccessMsg, setAuthSuccessMsg] = useState("");
+  const [resetToken, setResetToken] = useState<string | null>(null);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
@@ -45,6 +52,19 @@ export default function App() {
   const [viewHistory, setViewHistory] = useState(false);
   const [historyLogs, setHistoryLogs] = useState<HistoryItem[]>([]);
 
+  // 1. Detect ?reset_token= parameter on page load
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tokenParam = params.get("reset_token");
+    if (tokenParam) {
+      setResetToken(tokenParam);
+      setAuthMode("reset");
+      setAuthError("");
+      setAuthSuccessMsg("");
+    }
+  }, []);
+
+  // 2. Detect & accept project invite link once authenticated
   useEffect(() => {
     if (!token) return;
 
@@ -67,28 +87,12 @@ export default function App() {
     }
   }, [token]);
 
-  // Check for invite link parameter in URL and auto-accept
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const inviteParam = params.get("invite");
-    if (inviteParam && token) {
-      api.post("/projects/accept-invite", { token: inviteParam })
-        .then((res) => {
-          alert(res.data.message || "Successfully joined project!");
-          // Clean up the URL without reloading
-          window.history.replaceState({}, document.title, window.location.pathname);
-          loadProjects();
-        })
-        .catch((err) => {
-          alert(err.response?.data?.detail || "Could not redeem invitation link.");
-          window.history.replaceState({}, document.title, window.location.pathname);
-        });
-    }
-  }, [token]);
-
+  // Handle Login and Register
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError("");
+    setAuthSuccessMsg("");
+    setAuthLoading(true);
     try {
       const endpoint = authMode === "login" ? "/auth/login" : "/auth/register";
       const payload = authMode === "login"
@@ -100,7 +104,7 @@ export default function App() {
       setToken(res.data.access_token);
       setCurrentUser(res.data.user);
 
-      // Check if user came from an invite link
+      // Check if user arrived via an invite link
       const params = new URLSearchParams(window.location.search);
       const inviteToken = params.get("invite");
       if (inviteToken) {
@@ -120,6 +124,62 @@ export default function App() {
         err.message ||
         "Authentication failed";
       setAuthError(typeof msg === "object" ? JSON.stringify(msg) : msg);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  // Handle Requesting Password Reset Link
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError("");
+    setAuthSuccessMsg("");
+    setAuthLoading(true);
+    try {
+      const res = await api.post("/auth/forgot-password", { email: authEmail });
+      setAuthSuccessMsg(res.data.message || "Reset link sent! Please check your inbox.");
+    } catch (err: any) {
+      setAuthError(err.response?.data?.detail || "Failed to send reset link. Try again later.");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  // Handle Submitting New Password
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError("");
+    setAuthSuccessMsg("");
+
+    if (newPassword.length < 6) {
+      setAuthError("Password must be at least 6 characters long.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setAuthError("Passwords do not match.");
+      return;
+    }
+
+    setAuthLoading(true);
+    try {
+      const res = await api.post("/auth/reset-password", {
+        token: resetToken,
+        new_password: newPassword,
+      });
+      setAuthSuccessMsg(res.data.message || "Password updated successfully!");
+      // Clean query parameter from URL
+      window.history.replaceState({}, document.title, window.location.pathname);
+      setTimeout(() => {
+        setAuthMode("login");
+        setAuthSuccessMsg("Password reset complete. Please log in with your new credentials.");
+        setNewPassword("");
+        setConfirmPassword("");
+        setResetToken(null);
+      }, 2000);
+    } catch (err: any) {
+      setAuthError(err.response?.data?.detail || "Invalid or expired reset token.");
+    } finally {
+      setAuthLoading(false);
     }
   };
 
@@ -296,6 +356,7 @@ export default function App() {
     alert("Environment variables copied to clipboard!");
   };
 
+  // Unauthenticated View
   if (!token) {
     return (
       <div className="min-h-screen flex items-center justify-center p-6 bg-slate-950 text-slate-100">
@@ -305,22 +366,23 @@ export default function App() {
             <h1 className="text-2xl font-bold tracking-tight">EnvShare</h1>
           </div>
 
-          <div className="flex border-b border-slate-800 mb-6">
-            <button
-              onClick={() => { setAuthMode("login"); setAuthError(""); }}
-              className={`flex-1 py-2 font-medium text-sm border-b-2 transition ${authMode === "login" ? "border-emerald-500 text-emerald-400" : "border-transparent text-slate-400 hover:text-slate-200"
-                }`}
-            >
-              Sign In
-            </button>
-            <button
-              onClick={() => { setAuthMode("register"); setAuthError(""); }}
-              className={`flex-1 py-2 font-medium text-sm border-b-2 transition ${authMode === "register" ? "border-emerald-500 text-emerald-400" : "border-transparent text-slate-400 hover:text-slate-200"
-                }`}
-            >
-              Register
-            </button>
-          </div>
+          {/* Tab bar (visible when not in reset mode) */}
+          {authMode !== "reset" && (
+            <div className="flex border-b border-slate-800 mb-6">
+              <button
+                onClick={() => { setAuthMode("login"); setAuthError(""); setAuthSuccessMsg(""); }}
+                className={`flex-1 py-2 font-medium text-sm border-b-2 transition ${authMode === "login" ? "border-emerald-500 text-emerald-400" : "border-transparent text-slate-400 hover:text-slate-200"}`}
+              >
+                Sign In
+              </button>
+              <button
+                onClick={() => { setAuthMode("register"); setAuthError(""); setAuthSuccessMsg(""); }}
+                className={`flex-1 py-2 font-medium text-sm border-b-2 transition ${authMode === "register" ? "border-emerald-500 text-emerald-400" : "border-transparent text-slate-400 hover:text-slate-200"}`}
+              >
+                Register
+              </button>
+            </div>
+          )}
 
           {authError && (
             <div className="bg-red-500/10 border border-red-500/30 text-red-400 p-3 rounded-lg text-sm mb-4">
@@ -328,49 +390,163 @@ export default function App() {
             </div>
           )}
 
-          <form onSubmit={handleAuthSubmit} className="space-y-4">
-            {authMode === "register" && (
+          {authSuccessMsg && (
+            <div className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 p-3 rounded-lg text-sm mb-4">
+              {authSuccessMsg}
+            </div>
+          )}
+
+          {/* 1. Reset Password Form (Arrived via email link) */}
+          {authMode === "reset" && (
+            <form onSubmit={handleResetPassword} className="space-y-4">
+              <h2 className="text-base font-semibold text-slate-200 mb-1">Set New Password</h2>
+              <p className="text-xs text-slate-400 mb-3">Please choose a secure password for your account.</p>
+
               <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Full Name</label>
+                <label className="block text-xs font-medium text-slate-400 mb-1">New Password</label>
                 <input
-                  type="text"
+                  type="password"
                   required
-                  value={authName}
-                  onChange={(e) => setAuthName(e.target.value)}
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500"
-                  placeholder="Mohammad Shamsuddin"
+                  placeholder="••••••••••••"
                 />
               </div>
-            )}
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">Email</label>
-              <input
-                type="email"
-                required
-                value={authEmail}
-                onChange={(e) => setAuthEmail(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500"
-                placeholder="developer@example.com"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">Password</label>
-              <input
-                type="password"
-                required
-                value={authPassword}
-                onChange={(e) => setAuthPassword(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500"
-                placeholder="••••••••••••"
-              />
-            </div>
-            <button
-              type="submit"
-              className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-2 rounded-lg text-sm transition mt-2 shadow-lg shadow-emerald-950"
-            >
-              {authMode === "login" ? "Sign In" : "Create Account"}
-            </button>
-          </form>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">Confirm New Password</label>
+                <input
+                  type="password"
+                  required
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500"
+                  placeholder="••••••••••••"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={authLoading}
+                className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-medium py-2 rounded-lg text-sm transition mt-2 shadow-lg shadow-emerald-950"
+              >
+                {authLoading ? "Updating Password..." : "Update Password"}
+              </button>
+
+              <div className="text-center pt-2">
+                <button
+                  type="button"
+                  onClick={() => { setAuthMode("login"); setAuthError(""); setAuthSuccessMsg(""); }}
+                  className="text-xs text-slate-400 hover:text-slate-200 transition"
+                >
+                  Back to Sign In
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* 2. Forgot Password Request Form */}
+          {authMode === "forgot" && (
+            <form onSubmit={handleForgotPassword} className="space-y-4">
+              <h2 className="text-base font-semibold text-slate-200 mb-1">Recover Password</h2>
+              <p className="text-xs text-slate-400 mb-3">
+                Enter your account email and we'll send you a secure reset link valid for 15 minutes.
+              </p>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">Email Address</label>
+                <input
+                  type="email"
+                  required
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500"
+                  placeholder="developer@example.com"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={authLoading}
+                className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-medium py-2 rounded-lg text-sm transition mt-2 shadow-lg shadow-emerald-950"
+              >
+                {authLoading ? "Sending Link..." : "Send Reset Link"}
+              </button>
+
+              <div className="text-center pt-2">
+                <button
+                  type="button"
+                  onClick={() => { setAuthMode("login"); setAuthError(""); setAuthSuccessMsg(""); }}
+                  className="text-xs text-slate-400 hover:text-slate-200 transition"
+                >
+                  ← Back to Sign In
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* 3. Standard Login / Register Form */}
+          {(authMode === "login" || authMode === "register") && (
+            <form onSubmit={handleAuthSubmit} className="space-y-4">
+              {authMode === "register" && (
+                <div>
+                  <label className="block text-xs font-medium text-slate-400 mb-1">Full Name</label>
+                  <input
+                    type="text"
+                    required
+                    value={authName}
+                    onChange={(e) => setAuthName(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500"
+                    placeholder="Mohammad Shamsuddin"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">Email</label>
+                <input
+                  type="email"
+                  required
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500"
+                  placeholder="developer@example.com"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-medium text-slate-400">Password</label>
+                  {authMode === "login" && (
+                    <button
+                      type="button"
+                      onClick={() => { setAuthMode("forgot"); setAuthError(""); setAuthSuccessMsg(""); }}
+                      className="text-xs text-emerald-400 hover:text-emerald-300 transition"
+                    >
+                      Forgot password?
+                    </button>
+                  )}
+                </div>
+                <input
+                  type="password"
+                  required
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500"
+                  placeholder="••••••••••••"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={authLoading}
+                className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-medium py-2 rounded-lg text-sm transition mt-2 shadow-lg shadow-emerald-950"
+              >
+                {authLoading ? "Please wait..." : authMode === "login" ? "Sign In" : "Create Account"}
+              </button>
+            </form>
+          )}
         </div>
       </div>
     );

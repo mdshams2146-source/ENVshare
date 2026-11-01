@@ -98,3 +98,10 @@ class HistoryLogOut(BaseModel):
     new_value: Optional[str]
     user_name: str
     created_at: datetime
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
