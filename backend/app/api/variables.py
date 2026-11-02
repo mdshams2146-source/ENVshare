@@ -1,8 +1,9 @@
+import json
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
 from app.core.database import get_db
-from app.models.models import Variable, Environment, ProjectMember, HistoryLog, User
+from app.models.models import Variable, Environment, ProjectMember, HistoryLog, User, EnvironmentSnapshot
 from app.schemas.schemas import (
     VariableCreate,
     VariableUpdate,
@@ -176,6 +177,21 @@ def commit_bulk_import(
     current_user: User = Depends(get_current_user)
 ):
     env = verify_env_access(env_id, current_user.id, db)
+
+    # Auto-create a disaster recovery snapshot before committing
+    existing_vars = db.query(Variable).filter(Variable.environment_id == env_id).all()
+    if existing_vars:
+        pre_import_data = [
+            {"key": v.key, "value": v.value, "iv": v.iv, "is_sensitive": v.is_sensitive}
+            for v in existing_vars
+        ]
+        db.add(EnvironmentSnapshot(
+            environment_id=env_id,
+            created_by_id=current_user.id,
+            name=f"Auto-backup before Smart Import ({len(existing_vars)} vars)",
+            variables_data=json.dumps(pre_import_data)
+        ))
+        db.flush()
 
     for item in payload.items:
         if item.status == "UNCHANGED":

@@ -42,3 +42,11 @@ export interface HistoryItem {
     user_name: string;
     created_at: string;
 }
+
+export interface SnapshotItem {
+    id: string;
+    name: string;
+    created_at: string;
+    created_by_name: string;
+    var_count: number;
+}

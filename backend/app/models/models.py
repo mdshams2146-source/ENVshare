@@ -104,3 +104,16 @@ class ProjectInvitation(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     project = relationship("Project", back_populates="invitations")
+
+class EnvironmentSnapshot(Base):
+    __tablename__ = "environment_snapshots"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    environment_id = Column(String, ForeignKey("environments.id", ondelete="CASCADE"), nullable=False)
+    created_by_id = Column(String, ForeignKey("users.id"), nullable=False)
+    name = Column(String, nullable=False)  # e.g., "Pre-import Snapshot", "Manual Backup v1"
+    variables_data = Column(String, nullable=False)  # JSON-serialized list of variables
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    environment = relationship("Environment", backref="snapshots")
+    created_by = relationship("User")    

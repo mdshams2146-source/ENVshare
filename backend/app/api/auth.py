@@ -24,13 +24,16 @@ router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
 @router.post("/register", response_model=TokenResponse)
 def register(user_in: UserRegister, db: Session = Depends(get_db)):
-    existing = db.query(User).filter(User.email == user_in.email).first()
+    # Normalize email to prevent casing and trailing space mismatches
+    normalized_email = user_in.email.strip().lower()
+
+    existing = db.query(User).filter(User.email == normalized_email).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
     
     new_user = User(
-        name=user_in.name,
-        email=user_in.email,
+        name=user_in.name.strip(),
+        email=normalized_email,
         password_hash=hash_password(user_in.password)
     )
     db.add(new_user)
@@ -42,7 +45,10 @@ def register(user_in: UserRegister, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=TokenResponse)
 def login(login_in: UserLogin, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == login_in.email).first()
+    # Normalize email on login as well
+    normalized_email = login_in.email.strip().lower()
+
+    user = db.query(User).filter(User.email == normalized_email).first()
     if not user or not verify_password(login_in.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
@@ -55,7 +61,8 @@ def get_me(current_user: User = Depends(get_current_user)):
 
 @router.post("/forgot-password")
 def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == payload.email).first()
+    normalized_email = payload.email.strip().lower()
+    user = db.query(User).filter(User.email == normalized_email).first()
     
     # Send email only if the user exists
     if user:
@@ -80,7 +87,8 @@ def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db))
             detail="Reset token is invalid or has expired."
         )
 
-    user = db.query(User).filter(User.email == email).first()
+    normalized_email = email.strip().lower()
+    user = db.query(User).filter(User.email == normalized_email).first()
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

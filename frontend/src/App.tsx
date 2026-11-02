@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from "react";
 import { api } from "./api";
-import type { User, Project, Environment, VariableItem, DiffItem, HistoryItem } from "./types";
+import type { User, Project, Environment, VariableItem, DiffItem, HistoryItem, SnapshotItem } from "./types";
 import {
   KeyRound, Shield, Eye, EyeOff, Plus, Trash2, ClipboardPaste,
   History, LogOut, CheckCircle, AlertTriangle, ArrowRight, UserPlus, FolderPlus, Download,
-  Copy, Check, RotateCcw
+  Copy, Check, RotateCcw, Camera, RefreshCw
 } from "lucide-react";
 
 export default function App() {
@@ -12,6 +12,12 @@ export default function App() {
   const [token, setToken] = useState<string | null>(localStorage.getItem("token"));
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [revertingLogId, setRevertingLogId] = useState<string | null>(null);
+
+  // Snapshot Disaster Recovery States
+  const [showSnapshotsModal, setShowSnapshotsModal] = useState(false);
+  const [snapshots, setSnapshots] = useState<SnapshotItem[]>([]);
+  const [newSnapshotName, setNewSnapshotName] = useState("");
+  const [isRollingBack, setIsRollingBack] = useState<string | null>(null);
 
   // Auth view states
   const [authMode, setAuthMode] = useState<"login" | "register" | "forgot" | "reset">("login");
@@ -188,6 +194,10 @@ export default function App() {
     localStorage.removeItem("token");
     setToken(null);
     setCurrentUser(null);
+    setAuthEmail("");
+    setAuthPassword("");
+    setAuthError("");
+    setAuthSuccessMsg("");
     setProjects([]);
     setActiveProject(null);
     setActiveEnv(null);
@@ -271,6 +281,49 @@ export default function App() {
       setHistoryLogs(res.data);
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const loadSnapshots = async () => {
+    if (!activeEnv) return;
+    try {
+      const res = await api.get(`/environments/${activeEnv.id}/snapshots`);
+      setSnapshots(res.data);
+    } catch (err) {
+      console.error("Failed to load snapshots", err);
+    }
+  };
+
+  const handleCreateSnapshot = async () => {
+    if (!activeEnv) return;
+    try {
+      await api.post(`/environments/${activeEnv.id}/snapshots`, {
+        name: newSnapshotName.trim() || `Snapshot ${new Date().toLocaleTimeString()}`
+      });
+      setNewSnapshotName("");
+      loadSnapshots();
+    } catch (err: any) {
+      alert(err.response?.data?.detail || "Failed to create snapshot");
+    }
+  };
+
+  const handleRollbackSnapshot = async (snap: SnapshotItem) => {
+    if (!activeEnv) return;
+    if (!confirm(`Warning: Rolling back to "${snap.name}" will replace all current environment variables. A safety backup of your current state will be saved. Continue?`)) {
+      return;
+    }
+
+    setIsRollingBack(snap.id);
+    try {
+      await api.post(`/environments/${activeEnv.id}/snapshots/${snap.id}/rollback`);
+      await loadVariables();
+      await loadSnapshots();
+      alert(`Successfully restored environment to "${snap.name}"!`);
+      setShowSnapshotsModal(false);
+    } catch (err: any) {
+      alert(err.response?.data?.detail || "Rollback failed");
+    } finally {
+      setIsRollingBack(null);
     }
   };
 
@@ -652,6 +705,16 @@ export default function App() {
                       Invite Member
                     </button>
                   )}
+                  <button
+                    onClick={() => {
+                      setShowSnapshotsModal(true);
+                      loadSnapshots();
+                    }}
+                    className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-lg text-sm transition"
+                  >
+                    <Camera className="w-4 h-4 text-amber-400" />
+                    Snapshots
+                  </button>
                   <button
                     onClick={() => setViewHistory(!viewHistory)}
                     className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition ${viewHistory ? "bg-emerald-600 text-white" : "bg-slate-800 hover:bg-slate-700 text-slate-200"
@@ -1120,6 +1183,85 @@ export default function App() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Snapshots & Disaster Recovery Modal */}
+      {showSnapshotsModal && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 w-full max-w-2xl shadow-2xl flex flex-col max-h-[85vh]">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-lg font-bold flex items-center gap-2">
+                <Camera className="w-5 h-5 text-amber-400" />
+                Environment Snapshots & Disaster Recovery
+              </h3>
+            </div>
+            <p className="text-xs text-slate-400 mb-4">
+              Roll back entire environments to previous versions. A safety backup of the current state is automatically created before any restore.
+            </p>
+
+            {/* Create Manual Snapshot */}
+            <div className="flex gap-2 mb-4 bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+              <input
+                type="text"
+                value={newSnapshotName}
+                onChange={(e) => setNewSnapshotName(e.target.value)}
+                placeholder="Snapshot name (e.g., Pre-v2 Release)"
+                className="flex-1 bg-transparent border-none text-xs text-slate-200 focus:outline-none px-2"
+              />
+              <button
+                onClick={handleCreateSnapshot}
+                className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3 py-1.5 rounded font-medium transition"
+              >
+                Take Snapshot
+              </button>
+            </div>
+
+            {/* Snapshots List */}
+            <div className="flex-1 overflow-y-auto space-y-2 border border-slate-800 rounded-lg bg-slate-950 p-3">
+              {snapshots.map((snap) => (
+                <div
+                  key={snap.id}
+                  className="p-3 bg-slate-900 border border-slate-800 rounded-lg flex items-center justify-between"
+                >
+                  <div>
+                    <p className="text-sm font-semibold text-slate-200">{snap.name}</p>
+                    <div className="flex items-center gap-3 text-[11px] text-slate-400 mt-1">
+                      <span>{snap.var_count} variables</span>
+                      <span>•</span>
+                      <span>Created by {snap.created_by_name}</span>
+                      <span>•</span>
+                      <span>{new Date(snap.created_at).toLocaleString()}</span>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => handleRollbackSnapshot(snap)}
+                    disabled={isRollingBack === snap.id}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded font-medium transition disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isRollingBack === snap.id ? "animate-spin" : ""}`} />
+                    Restore Snapshot
+                  </button>
+                </div>
+              ))}
+
+              {snapshots.length === 0 && (
+                <p className="text-xs text-slate-500 text-center py-6">
+                  No snapshots captured yet. Take a snapshot before major updates.
+                </p>
+              )}
+            </div>
+
+            <div className="flex justify-end mt-4">
+              <button
+                onClick={() => setShowSnapshotsModal(false)}
+                className="px-4 py-2 text-sm text-slate-400 hover:text-slate-200"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}
