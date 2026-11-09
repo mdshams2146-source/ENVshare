@@ -1,8 +1,56 @@
 from typing import List, Dict
+import re
+
+def is_sensitive_key(key: str) -> bool:
+    """Detect common secret-related and credential/connection environment variable names."""
+    normalized = key.strip().upper()
+    tokens = set(re.findall(r"[A-Z0-9]+", normalized))
+
+    secret_tokens = {
+        "SECRET", "PASSWORD", "PASSWD", "TOKEN",
+        "CREDENTIAL", "CREDENTIALS", "APIKEY", "PRIVATEKEY"
+    }
+
+    if tokens & secret_tokens:
+        return True
+
+    sensitive_key_pairs = {
+        ("API", "KEY"),
+        ("ACCESS", "KEY"),
+        ("PRIVATE", "KEY"),
+        ("SIGNING", "KEY"),
+        ("ENCRYPTION", "KEY"),
+        ("SECRET", "KEY"),
+        ("CLIENT", "SECRET"),
+        ("DATABASE", "URL"),
+        ("DATABASE", "URI"),
+        ("DB", "URL"),
+        ("DB", "URI"),
+        ("CONNECTION", "STRING"),
+        ("CONN", "STRING"),
+        ("REDIS", "URL"),
+        ("REDIS", "URI"),
+        ("MONGO", "URI"),
+        ("MONGO", "URL"),
+        ("MONGODB", "URI"),
+        ("POSTGRES", "URL"),
+        ("POSTGRESQL", "URL"),
+        ("MYSQL", "URL"),
+    }
+
+    if any(set(pair).issubset(tokens) for pair in sensitive_key_pairs):
+        return True
+
+    conn_pattern = r"(DATABASE|DB|POSTGRES|POSTGRESQL|MYSQL|MONGO|MONGODB|REDIS).*(URL|URI)"
+    if re.search(conn_pattern, normalized):
+        return True
+
+    return False
 
 def parse_raw_env(raw_text: str) -> List[Dict[str, str]]:
     """Parses raw text into key-value pairs, ignoring empty lines and comments."""
     parsed = []
+    seen_keys = set()
     lines = raw_text.splitlines()
     for line in lines:
         cleaned = line.strip()
@@ -14,6 +62,9 @@ def parse_raw_env(raw_text: str) -> List[Dict[str, str]]:
         key = key.strip()
         value = value.strip().strip("'").strip('"')
         if key:
+            if key in seen_keys:
+                raise ValueError(f"Duplicate environment variable key: {key}")
+            seen_keys.add(key)
             parsed.append({"key": key, "value": value})
     return parsed
 

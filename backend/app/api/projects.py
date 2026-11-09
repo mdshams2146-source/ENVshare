@@ -4,12 +4,14 @@ from datetime import datetime, timedelta, timezone
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.exc import IntegrityError
 
 from app.core.database import get_db
 from app.models.models import Project, ProjectMember, Environment, User, ProjectInvitation
-from app.schemas.schemas import ProjectCreate, ProjectOut
+from app.schemas.schemas import ProjectCreate, ProjectOut, MemberOut
 from app.api.deps import get_current_user
+from app.core.roles import OWNER_ROLE, MEMBER_ROLE, is_supported_project_role
 
 router = APIRouter(prefix="/api/projects", tags=["Projects"])
 
@@ -33,7 +35,7 @@ def create_project(
     db.flush()
 
     # Assign creator as OWNER
-    member = ProjectMember(user_id=current_user.id, project_id=project.id, role="OWNER")
+    member = ProjectMember(user_id=current_user.id, project_id=project.id, role=OWNER_ROLE)
     db.add(member)
 
     # Automatically generate default environments
@@ -49,7 +51,7 @@ def create_project(
         "name": project.name,
         "description": project.description,
         "created_at": project.created_at,
-        "role": "OWNER",
+        "role": OWNER_ROLE,
         "environments": project.environments
     }
 
@@ -58,9 +60,16 @@ def get_user_projects(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    memberships = db.query(ProjectMember).filter(ProjectMember.user_id == current_user.id).all()
+    memberships = (
+        db.query(ProjectMember)
+        .options(joinedload(ProjectMember.project).joinedload(Project.environments))
+        .filter(ProjectMember.user_id == current_user.id)
+        .all()
+    )
     results = []
     for m in memberships:
+        if not is_supported_project_role(m.role):
+            raise HTTPException(status_code=403, detail="Unsupported project role")
         p = m.project
         results.append({
             "id": p.id,
@@ -85,6 +94,8 @@ def get_project_details(
 
     if not membership:
         raise HTTPException(status_code=403, detail="Access denied to this project")
+    if not is_supported_project_role(membership.role):
+        raise HTTPException(status_code=403, detail="Unsupported project role")
 
     p = membership.project
     return {
@@ -95,6 +106,40 @@ def get_project_details(
         "role": membership.role,
         "environments": p.environments
     }
+
+@router.get("/{project_id}/members", response_model=List[MemberOut])
+def get_project_members(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Retrieves all members for a project (UI-06)."""
+    membership = db.query(ProjectMember).filter(
+        ProjectMember.project_id == project_id,
+        ProjectMember.user_id == current_user.id
+    ).first()
+
+    if not membership:
+        raise HTTPException(status_code=403, detail="Access denied to this project")
+    if not is_supported_project_role(membership.role):
+        raise HTTPException(status_code=403, detail="Unsupported project role")
+
+    members = (
+        db.query(ProjectMember)
+        .options(joinedload(ProjectMember.user))
+        .filter(ProjectMember.project_id == project_id)
+        .all()
+    )
+    return [
+        {
+            "id": m.id,
+            "user_id": m.user_id,
+            "role": m.role,
+            "name": m.user.name if m.user else "Unknown User",
+            "email": m.user.email if m.user else "Unknown Email"
+        }
+        for m in members
+    ]
 
 @router.post("/{project_id}/invites", response_model=InviteCreateResponse)
 def create_project_invite(
@@ -108,7 +153,7 @@ def create_project_invite(
         ProjectMember.user_id == current_user.id
     ).first()
 
-    if not membership or membership.role != "OWNER":
+    if not membership or membership.role != OWNER_ROLE:
         raise HTTPException(status_code=403, detail="Only project owners can generate invite links")
 
     # Cryptographically secure random token
@@ -118,7 +163,7 @@ def create_project_invite(
     invite = ProjectInvitation(
         project_id=project_id,
         token=token,
-        role="MEMBER",
+        role=MEMBER_ROLE,
         expires_at=expires_at,
     )
     db.add(invite)
@@ -139,7 +184,7 @@ def accept_project_invite(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Validates the invite token and adds the current authenticated user as a MEMBER."""
+    """Accept an invitation using atomic single-use token consumption."""
     invite = db.query(ProjectInvitation).filter(
         ProjectInvitation.token == body.token
     ).first()
@@ -147,34 +192,67 @@ def accept_project_invite(
     if not invite:
         raise HTTPException(status_code=404, detail="Invalid invitation link")
 
-    if invite.is_used:
-        raise HTTPException(status_code=400, detail="This invitation link has already been used")
-
-    # Timezone-aware expiration check
-    now = datetime.now(timezone.utc)
-    exp = invite.expires_at if invite.expires_at.tzinfo else invite.expires_at.replace(tzinfo=timezone.utc)
-    if now > exp:
-        raise HTTPException(status_code=400, detail="This invitation link has expired")
-
-    # Check if user is already a member
     existing = db.query(ProjectMember).filter(
         ProjectMember.project_id == invite.project_id,
         ProjectMember.user_id == current_user.id
     ).first()
 
     if existing:
-        invite.is_used = True
-        db.commit()
-        return {"message": "You are already a member of this project", "project_id": invite.project_id}
+        return {
+            "message": "You are already a member of this project",
+            "project_id": invite.project_id
+        }
 
-    # Add as member and mark token used
-    new_member = ProjectMember(
+    if invite.is_used:
+        raise HTTPException(status_code=400, detail="This invitation link has already been used")
+
+    now = datetime.now(timezone.utc)
+    exp = invite.expires_at
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+
+    if now > exp:
+        raise HTTPException(status_code=400, detail="This invitation link has expired")
+
+    assigned_role = invite.role or MEMBER_ROLE
+    if assigned_role != MEMBER_ROLE:
+        raise HTTPException(status_code=400, detail="Invitation contains an unsupported project role")
+
+    # Atomic claim: only one request can change this invitation from unused to used.
+    claimed = db.query(ProjectInvitation).filter(
+        ProjectInvitation.id == invite.id,
+        ProjectInvitation.is_used.is_(False)
+    ).update(
+        {ProjectInvitation.is_used: True},
+        synchronize_session=False
+    )
+
+    if claimed != 1:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail="This invitation link has already been used"
+        )
+
+    db.add(ProjectMember(
         user_id=current_user.id,
         project_id=invite.project_id,
-        role=invite.role or "MEMBER"
-    )
-    invite.is_used = True
-    db.add(new_member)
-    db.commit()
+        role=assigned_role
+    ))
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = db.query(ProjectMember).filter(
+            ProjectMember.project_id == invite.project_id,
+            ProjectMember.user_id == current_user.id
+        ).first()
+        if existing:
+            return {
+                "message": "You are already a member of this project",
+                "project_id": invite.project_id
+            }
+        raise HTTPException(status_code=409, detail="Invitation could not be accepted")
 
     return {"message": "Successfully joined project", "project_id": invite.project_id}

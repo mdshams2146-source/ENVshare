@@ -1,22 +1,32 @@
-from pydantic import BaseModel, EmailStr
+﻿from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import Optional, List
 from datetime import datetime
 
 # --- Auth ---
 class UserRegister(BaseModel):
-    name: str
+    name: str = Field(..., min_length=1, max_length=100)
     email: EmailStr
-    password: str
+    password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_strength(cls, v: str) -> str:
+        if len(v.strip()) < 8:
+            raise ValueError("Password must be at least 8 characters long and not only whitespace")
+        if not any(char.isalpha() for char in v) or not any(char.isdigit() for char in v):
+            raise ValueError("Password must contain at least one letter and one number")
+        return v
 
 class UserLogin(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(..., min_length=1)
 
 class UserOut(BaseModel):
     id: str
     name: str
     email: EmailStr
     created_at: datetime
+
     class Config:
         from_attributes = True
 
@@ -27,12 +37,13 @@ class TokenResponse(BaseModel):
 
 # --- Projects & Environments ---
 class ProjectCreate(BaseModel):
-    name: str
-    description: Optional[str] = None
+    name: str = Field(..., min_length=1, max_length=100)
+    description: Optional[str] = Field(None, max_length=500)
 
 class EnvironmentOut(BaseModel):
     id: str
     name: str
+
     class Config:
         from_attributes = True
 
@@ -50,6 +61,7 @@ class ProjectOut(BaseModel):
     created_at: datetime
     role: Optional[str] = None
     environments: List[EnvironmentOut] = []
+
     class Config:
         from_attributes = True
 
@@ -58,7 +70,7 @@ class AddMemberRequest(BaseModel):
 
 # --- Variables ---
 class VariableCreate(BaseModel):
-    key: str
+    key: str = Field(..., min_length=1, max_length=255, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
     value: str
     is_sensitive: bool = False
 
@@ -72,6 +84,7 @@ class VariableOut(BaseModel):
     value: str
     is_sensitive: bool
     updated_at: datetime
+
     class Config:
         from_attributes = True
 
@@ -83,11 +96,14 @@ class DiffItem(BaseModel):
     key: str
     old_value: Optional[str] = None
     new_value: str
-    status: str  # NEW, UPDATE, UNCHANGED
+    status: str
     is_sensitive: bool = False
+    is_existing_sensitive: bool = False
 
 class BulkImportCommitRequest(BaseModel):
-    items: List[DiffItem]
+    raw_env: Optional[str] = None
+    items: Optional[List[DiffItem]] = None
+    sensitive_keys: List[str] = Field(default_factory=list)
 
 # --- History ---
 class HistoryLogOut(BaseModel):
@@ -103,5 +119,14 @@ class ForgotPasswordRequest(BaseModel):
     email: EmailStr
 
 class ResetPasswordRequest(BaseModel):
-    token: str
-    new_password: str
+    token: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_password_strength(cls, v: str) -> str:
+        if len(v.strip()) < 8:
+            raise ValueError("New password must be at least 8 characters long and not only whitespace")
+        if not any(char.isalpha() for char in v) or not any(char.isdigit() for char in v):
+            raise ValueError("Password must contain at least one letter and one number")
+        return v

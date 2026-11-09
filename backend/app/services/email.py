@@ -1,21 +1,36 @@
 import os
 import smtplib
 from email.message import EmailMessage
+from pathlib import Path
 from dotenv import load_dotenv
 
-# Load variables from .env file
-load_dotenv()
+# Load variables deterministically from backend/.env
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+ENV_FILE_PATH = BASE_DIR / ".env"
+if ENV_FILE_PATH.exists():
+    load_dotenv(ENV_FILE_PATH)
+else:
+    load_dotenv()
 
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
+
+def _get_smtp_port() -> int:
+    port_val = os.getenv("SMTP_PORT", "587")
+    try:
+        return int(port_val)
+    except (ValueError, TypeError):
+        return 587
+
+SMTP_PORT = _get_smtp_port()
 SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
-FRONTEND_URL = os.getenv("FRONTEND_URL", "https://en-vshare.vercel.app")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://en-vshare.vercel.app").rstrip("/")
 
 
 def send_password_reset_email(to_email: str, reset_token: str):
-    """Sends a password reset email containing a secure one-time link."""
-    reset_url = f"{FRONTEND_URL}/?reset_token={reset_token}"
+    """Sends a password reset email containing a secure one-time link in hash fragment."""
+    reset_url = f"{FRONTEND_URL}/#reset_token={reset_token}"
+
 
     msg = EmailMessage()
     msg["Subject"] = "Reset Your EnvShare Password"

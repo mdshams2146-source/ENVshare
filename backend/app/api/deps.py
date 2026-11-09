@@ -15,7 +15,26 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    # Require token_version claim in access token (CONFIG-04)
+    token_version = payload.get("token_version")
+    if token_version is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token: missing token_version claim. Please log in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     user = db.query(User).filter(User.id == payload["sub"]).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    # Reject mismatched token_version (session invalidated after password reset)
+    if user.token_version != token_version:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session has been revoked due to password update. Please log in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     return user

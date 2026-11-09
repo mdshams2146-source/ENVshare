@@ -31,6 +31,7 @@ export interface DiffItem {
     new_value: string;
     status: "NEW" | "UPDATE" | "UNCHANGED";
     is_sensitive: boolean;
+    is_existing_sensitive: boolean;
 }
 
 export interface HistoryItem {
@@ -49,4 +50,12 @@ export interface SnapshotItem {
     created_at: string;
     created_by_name: string;
     var_count: number;
+}
+
+export interface ProjectMemberItem {
+    id: string;
+    user_id: string;
+    role: string;
+    name: string;
+    email: string;
 }

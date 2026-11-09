@@ -9,6 +9,7 @@ from app.core.database import get_db
 from app.models.models import Environment, ProjectMember, User, Variable, HistoryLog, EnvironmentSnapshot
 from app.api.deps import get_current_user
 from app.schemas.schemas import VariableOut
+from app.core.roles import is_supported_project_role
 
 router = APIRouter(prefix="/api/environments/{env_id}/snapshots", tags=["Snapshots"])
 
@@ -25,7 +26,7 @@ class SnapshotOut(BaseModel):
     class Config:
         from_attributes = True
 
-def verify_env_access(env_id: str, user_id: str, db: Session) -> Environment:
+def verify_env_access(env_id: str, user_id: str, db: Session, required_roles: list = None) -> Environment:
     env = db.query(Environment).filter(Environment.id == env_id).first()
     if not env:
         raise HTTPException(status_code=404, detail="Environment not found")
@@ -35,6 +36,13 @@ def verify_env_access(env_id: str, user_id: str, db: Session) -> Environment:
     ).first()
     if not member:
         raise HTTPException(status_code=403, detail="Access denied")
+    if not is_supported_project_role(member.role):
+        raise HTTPException(status_code=403, detail="Unsupported project role")
+    if required_roles and member.role not in required_roles:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Operation requires one of the following roles: {', '.join(required_roles)}"
+        )
     return env
 
 @router.get("", response_model=List[SnapshotOut])
@@ -109,7 +117,7 @@ def rollback_to_snapshot(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    env = verify_env_access(env_id, current_user.id, db)
+    env = verify_env_access(env_id, current_user.id, db, required_roles=["OWNER"])
 
     target_snap = db.query(EnvironmentSnapshot).filter(
         EnvironmentSnapshot.id == snapshot_id,

@@ -1,0 +1,26 @@
+﻿# Environment secrets
+.env
+.env.*
+!.env.example
+
+# Python local files
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# SQLite runtime files
+*.db-wal
+*.db-shm
+
+# Local backups
+remediation_backup/
+*.backup-*
+
+# Frontend generated files
+node_modules/
+dist/
+dist-ssr/
+
+# Duplicate historical audit report
+/frontend/audit-details.json
